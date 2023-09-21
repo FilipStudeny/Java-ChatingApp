@@ -1,79 +1,46 @@
-import Interfaces.IServer_Client;
-
 import java.io.*;
-import java.net.Socket;
-import java.util.Scanner;
+import java.net.*;
 
-public class Client implements IServer_Client {
+public class Client {
 
-    private final BufferedReader serverReader;
-    private final BufferedWriter out;
+    public static void main(String[] args) {
+        final String serverAddress = "localhost"; // Change this to the server's IP address if needed
+        final int serverPort = 1234; // Change this to the server's port
 
-    public static void main(String[] args) throws IOException {
-        new Client().run();
-    }
+        try (Socket socket = new Socket(serverAddress, serverPort);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+             PrintWriter writer = new PrintWriter(socket.getOutputStream(), true);
+             BufferedReader userInput = new BufferedReader(new InputStreamReader(System.in))) {
 
-    public Client() throws IOException {
-        Socket clientSocket = new Socket("localhost", 8080);
-        this.serverReader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-        out = new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream())); // vytvoření BufferedWriter
-    }
+            System.out.print("Enter your username: ");
+            String username = userInput.readLine();
+            writer.println(username); // Send the username to the server
 
+            System.out.println("Connected to the server as " + username + ". Type '#exit' to disconnect.");
 
-    @Override
-    public void run() {
-        try {
-            sendUsername(out);
-            receiveMessagesThread();
-            sendMessage();
+            Thread receiveThread = new Thread(() -> {
+                try {
+                    String serverResponse;
+                    while ((serverResponse = reader.readLine()) != null) {
+                        System.out.println(serverResponse);
+                    }
+                } catch (IOException e) {
+                    System.out.println("Disconnected from the server.");
+                }
+            });
+            receiveThread.start();
 
+            String userInputLine;
+            while ((userInputLine = userInput.readLine()) != null) {
+                writer.println(userInputLine);
+                if (userInputLine.trim().equalsIgnoreCase("#exit")) {
+                    break;
+                }
+            }
+
+            receiveThread.interrupt(); // Stop the receiving thread when done
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
-
-    @Override
-    public void sendMessage() throws IOException {
-        Scanner in = new Scanner(System.in);
-        while (true) {
-            String message = in.nextLine();
-            if (message.equals("exit")) {
-                out.write("exit" + "\r\n");
-                out.flush();
-                System.exit(0);
-            } else {
-                out.write(message + "\r\n");
-                out.flush();
-                System.out.println("------------*Message send*------------");
-            }
-        }
-    }
-
-    @Override
-    public void sendUsername(BufferedWriter out) throws IOException {
-        System.out.print("Enter your username: ");
-        Scanner scanner = new Scanner(System.in);
-        String username = scanner.nextLine();
-
-        out.write(username + "\r\n");
-        out.flush();
-    }
-
-    @Override
-    public void receiveMessagesThread() {
-        Thread receiveThread = new Thread(new Runnable() {
-            public void run() {
-                try {
-                    while (true) {
-                        String message = serverReader.readLine();
-                        System.out.println(message);
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
-                }
-            }
-        });
-        receiveThread.start();
-    }
-
 }

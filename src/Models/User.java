@@ -1,35 +1,22 @@
 package Models;
 
-import Interfaces.IUser;
+import java.net.InetAddress;
 
-import java.net.Inet4Address;
-import java.net.Socket;
+public class User {
 
-public class User implements IUser {
-    private String username = null;
-    private Inet4Address address = null;
+    private String userName;
+    private InetAddress ipAdress;
 
-    public User(Inet4Address address){
-        this.address = address;
+    public User(String userName, InetAddress ipAdress){
+        this.userName = userName;
+        this.ipAdress = ipAdress;
     }
 
-    @Override
-    public void setUsername(String username) {
-        this.username = username;
+    public String getUserName() {
+        return this.userName;
     }
 
-    @Override
-    public String getUsername() {
-        return this.username;
-    }
-
-    @Override
-    public void setAddress(Inet4Address address) {
-        this.address = address;
-    }
-
-    @Override
-    public Inet4Address getAddress() {
-        return this.address;
+    public InetAddress getIpAdress(){
+        return this.ipAdress;
     }
 }

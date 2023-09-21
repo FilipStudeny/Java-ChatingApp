@@ -1,109 +1,45 @@
-import Interfaces.IServer;
-import Models.Client;
-
 import java.io.*;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.Set;
+import java.net.*;
+import java.util.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.CopyOnWriteArrayList;
 
-public class Server implements IServer {
-    private ServerSocket serverSocket;
-    final private ArrayList<Client> clients = new ArrayList<>();
+public class Server {
 
-    public static void main(String[] args) {
-        new Server().run();
-    }
+    private final List<ClientHandler> clients = new CopyOnWriteArrayList<>();
+    private final ExecutorService executorService = Executors.newCachedThreadPool();
+    private final Set<String> bannedWords = loadBannedWords();
 
-    public Server() {
-        try {
-            this.serverSocket = new ServerSocket(8080);
-            System.out.print("Server config succesfull, \n\t Awaiting clients...\n");
+    public void start(int port) {
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            System.out.println("Server started on port " + port);
+
+            while (true) {
+                Socket clientSocket = serverSocket.accept();
+                System.out.println("New client connected: " + clientSocket);
+
+                ClientHandler clientHandler = new ClientHandler(clientSocket);
+                clients.add(clientHandler);
+                executorService.execute(clientHandler);
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    @Override
-    public void run() {
-        connectClients();
-        readMessages();
-    }
-
-    @Override
-    public void connectClients() {
-        Thread acceptThread = new Thread(new Runnable() {
-            public void run() {
-                while (true) {
-                    try {
-                        Socket clientSocket = serverSocket.accept();
-                        PrintWriter writer = new PrintWriter(new OutputStreamWriter(clientSocket.getOutputStream()), true);
-                        Client client = new Client(clientSocket, writer);
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(client.getSocket().getInputStream()));
-                        client.setUsername(reader.readLine());
-
-                        synchronized (clients) {
-                            clients.add(client);
-                        }
-                        System.out.println("[" + client.getUsername() + "]" + " has connected.");
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-            }
-        });
-        acceptThread.start();
-    }
-
-
-    @Override
-    public void readMessages() {
-        while (true) {
-            ArrayList<Client> clientsToRemove = new ArrayList<>();
-            synchronized (clients) {
-                Iterator<Client> iterator = clients.iterator();
-                while (iterator.hasNext()) {
-                    Client MClientHandler = iterator.next();
-                    try {
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(MClientHandler.getSocket().getInputStream()));
-
-                        if (reader.ready()) {
-                            String message = reader.readLine();
-                            String clientUsername = MClientHandler.getUsername();
-                            System.out.println("Message from [" + clientUsername + "] : " + message);
-
-                            if (message.equals("#exit")) {
-                                System.out.println("[" + clientUsername + "]" + " disconnected");
-                                clientsToRemove.add(MClientHandler);
-                            } else {
-                                broadcastMessage(message, clientUsername);
-                            }
-                        }
-                    } catch (IOException e) {
-                        e.printStackTrace();
-                    }
-                }
-                // Remove disconnected clients outside the synchronized block
-                clients.removeAll(clientsToRemove);
-            }
-        }
-    }
-
-    @Override
-    public void broadcastMessage(String message, String username) {
+    private void removeClient(ClientHandler client) {
         synchronized (clients) {
-            for (Client MClientHandler : clients) {
-                String censoredMessage = censorMessage(message); // Replace banned words with asterisks
-                MClientHandler.getWriter().println("[" + username + "] : " + censoredMessage);
-                MClientHandler.getWriter().flush();
-            }
+            clients.remove(client);
         }
+        System.out.println("WARNING [" + client.getUsername() + "] has left the chat");
     }
 
+    public static void main(String[] args) {
+        Server server = new Server();
+        server.start(1234);
+    }
 
-    @Override
     public Set<String> loadBannedWords() {
         Set<String> bannedWords = new HashSet<>();
         try (BufferedReader reader = new BufferedReader(new FileReader("./ban_list.txt"))) {
@@ -117,22 +53,95 @@ public class Server implements IServer {
         return bannedWords;
     }
 
-    @Override
-    public String censorMessage(String message) {
-        Set<String> bannedWords = loadBannedWords();
-        String[] words = message.split("\\s+|(?=[,.!?;])|(?<=[,.!?;])");
-        StringBuilder censoredMessage = new StringBuilder();
+    private class ClientHandler implements Runnable {
+        private final Socket clientSocket;
+        private OutputStream outputStream;
+        private String username;
 
-        for (int i = 0; i < words.length; i++) {
-            String word = words[i];
-            String censoredWord;
-            if (bannedWords.contains(word.toLowerCase())) {
-                censoredWord = "*".repeat(word.length());
-            } else {
-                censoredWord = word;
-            }
-            censoredMessage.append(censoredWord).append(" ");
+        public ClientHandler(Socket socket) {
+            this.clientSocket = socket;
         }
-        return censoredMessage.toString().trim();
+
+        public void run() {
+            try (InputStream inputStream = clientSocket.getInputStream();
+                 OutputStream outputStream = clientSocket.getOutputStream();
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream))) {
+
+                this.outputStream = outputStream;
+
+                // Read the username sent by the client
+                this.username = reader.readLine();
+                broadcastMessage("[" + username + "] has joined the chat."); // Notify others about the new user
+
+                while (!clientSocket.isClosed()) {
+                    String message = (reader.readLine());
+
+                    if (message == null) {
+                        break;
+                    }
+
+                    message = censorMessage(message);
+                    System.out.println("[" + username + "] : " + message);
+
+                    if (message.trim().equalsIgnoreCase("#exit")) {
+                        removeClient(this);
+                        break;
+                    }
+
+                    broadcastMessage("[" + username + "] : " + message);
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+                // Handle the unexpected disconnection
+                System.out.println("[" + username + "] : " + " disconnected unexpectedly.");
+                removeClient(this);
+                try {
+                    broadcastMessage("[" + username + "] : " + " disconnected unexpectedly.");
+                } catch (IOException ex) {
+                    throw new RuntimeException(ex);
+                }
+            } finally {
+                try {
+                    clientSocket.close();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        private void broadcastMessage(String message) throws IOException {
+            synchronized (clients) {
+                for (ClientHandler client : clients) {
+                    if (client != this) {
+                        PrintWriter writer = new PrintWriter(client.outputStream, true);
+                        writer.println(message);
+                    }
+                }
+            }
+        }
+
+
+
+        public String censorMessage(String message) {
+            Set<String> bannedWords = loadBannedWords();
+            String[] words = message.split("\\s+|(?=[,.!?;])|(?<=[,.!?;])");
+            StringBuilder censoredMessage = new StringBuilder();
+
+            for (int i = 0; i < words.length; i++) {
+                String word = words[i];
+                String censoredWord;
+                if (bannedWords.contains(word.toLowerCase())) {
+                    censoredWord = "*".repeat(word.length());
+                } else {
+                    censoredWord = word;
+                }
+                censoredMessage.append(censoredWord).append(" ");
+            }
+            return censoredMessage.toString().trim();
+        }
     }
 }
