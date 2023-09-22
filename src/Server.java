@@ -19,7 +19,7 @@ public class Server {
                 Socket clientSocket = serverSocket.accept();
                 System.out.println("New client connected: " + clientSocket);
 
-                ClientHandler clientHandler = new ClientHandler(clientSocket);
+                ClientHandler clientHandler = new ClientHandler(clientSocket, this);
                 clients.add(clientHandler);
                 executorService.execute(clientHandler);
             }
@@ -28,16 +28,21 @@ public class Server {
         }
     }
 
-    private void removeClient(ClientHandler client) {
+    public void removeClient(ClientHandler client) {
         synchronized (clients) {
             clients.remove(client);
         }
-        System.out.println("WARNING [" + client.getUsername() + "] has left the chat");
+        System.out.println("[" + client.getUsername() + "] has left the chat");
     }
 
-    public static void main(String[] args) {
-        Server server = new Server();
-        server.start(1234);
+    public void broadcastMessage(String message, ClientHandler sender) throws IOException {
+        synchronized (clients) {
+            for (ClientHandler client : clients) {
+                if (client != sender) {
+                    client.sendMessage("[" + sender.getUsername() + "] : " + message);
+                }
+            }
+        }
     }
 
     public Set<String> loadBannedWords() {
@@ -53,13 +58,24 @@ public class Server {
         return bannedWords;
     }
 
-    private class ClientHandler implements Runnable {
+    public Set<String> getBannedWords() {
+        return bannedWords;
+    }
+
+    public static void main(String[] args) {
+        Server server = new Server();
+        server.start(1234);
+    }
+
+    public class ClientHandler implements Runnable {
         private final Socket clientSocket;
         private OutputStream outputStream;
         private String username;
+        private final Server server;
 
-        public ClientHandler(Socket socket) {
+        public ClientHandler(Socket socket, Server server) {
             this.clientSocket = socket;
+            this.server = server;
         }
 
         public void run() {
@@ -71,10 +87,10 @@ public class Server {
 
                 // Read the username sent by the client
                 this.username = reader.readLine();
-                broadcastMessage("[" + username + "] has joined the chat."); // Notify others about the new user
+                server.broadcastMessage("[" + username + "] has joined the chat.", this); // Notify others about the new user
 
                 while (!clientSocket.isClosed()) {
-                    String message = (reader.readLine());
+                    String message = reader.readLine();
 
                     if (message == null) {
                         break;
@@ -84,27 +100,34 @@ public class Server {
                     System.out.println("[" + username + "] : " + message);
 
                     if (message.trim().equalsIgnoreCase("#exit")) {
-                        removeClient(this);
+                        server.broadcastMessage("[" + this.username + "] has left the chat", this);
+                        server.removeClient(this);
                         break;
                     }
 
-                    broadcastMessage("[" + username + "] : " + message);
+                    server.broadcastMessage(message, this);
                 }
             } catch (IOException e) {
                 e.printStackTrace();
                 // Handle the unexpected disconnection
                 System.out.println("[" + username + "] : " + " disconnected unexpectedly.");
-                removeClient(this);
+                server.removeClient(this);
                 try {
-                    broadcastMessage("[" + username + "] : " + " disconnected unexpectedly.");
+                    server.broadcastMessage("[" + username + "] : " + " disconnected unexpectedly.", this);
                 } catch (IOException ex) {
                     throw new RuntimeException(ex);
                 }
             } finally {
                 try {
+                    server.broadcastMessage("[" + username + "] : " + " disconnected unexpectedly.", this);
                     clientSocket.close();
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    try {
+                        server.broadcastMessage("[" + username + "] : " + " disconnected unexpectedly.", this);
+                    } catch (IOException ex) {
+                        throw new RuntimeException(ex);
+                    }
+
                 }
             }
         }
@@ -113,26 +136,17 @@ public class Server {
             return username;
         }
 
-        private void broadcastMessage(String message) throws IOException {
-            synchronized (clients) {
-                for (ClientHandler client : clients) {
-                    if (client != this) {
-                        PrintWriter writer = new PrintWriter(client.outputStream, true);
-                        writer.println(message);
-                    }
-                }
-            }
+        public void sendMessage(String message) throws IOException {
+            PrintWriter writer = new PrintWriter(outputStream, true);
+            writer.println(message);
         }
 
-
-
-        public String censorMessage(String message) {
-            Set<String> bannedWords = loadBannedWords();
+        private String censorMessage(String message) {
+            Set<String> bannedWords = server.getBannedWords();
             String[] words = message.split("\\s+|(?=[,.!?;])|(?<=[,.!?;])");
             StringBuilder censoredMessage = new StringBuilder();
 
-            for (int i = 0; i < words.length; i++) {
-                String word = words[i];
+            for (String word : words) {
                 String censoredWord;
                 if (bannedWords.contains(word.toLowerCase())) {
                     censoredWord = "*".repeat(word.length());
