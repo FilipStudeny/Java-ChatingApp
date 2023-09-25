@@ -8,6 +8,7 @@ Simple Chat app created using Java Sockets.
   - User will be asked to choose a username
   - #users will send a list of all connected users
   - #exit client will disconnect from the server
+  - All messages are saved in a messages.txt file in this format timestap - username - message
 
 ![chat_imag](https://github.com/FilipStudeny/Java-ChatingApp/assets/81091191/8161f59c-986a-4d0a-8c05-e6c52a3c8bdc)
 
